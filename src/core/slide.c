@@ -45,8 +45,16 @@ int slide_pselect_words_per_set(void) {
 }
 
 static int slide_pselect_waiter_shift(void) {
-  return active_offsets ? active_offsets->pselect_waiter_shift
-                        : PSELECT_WAITER_WORD_SHIFT;
+  /* fops indexes waiter words from 2 (its layout is 2..14) and stores
+     pselect_waiter_shift = derived_PSELECT_WAITER_WORD_SHIFT - 2 in the
+     per-kernel offset table. slide indexes waiter words from 0 (its
+     layout is 0..13), so it must use the raw derived shift value, i.e.
+     pselect_waiter_shift + 2. This matches the reference (Linuxoid-cn)
+     which uses a single PSELECT_WAITER_WORD_SHIFT for both routes with
+     word indices 0..12. */
+  int fops_shift = active_offsets ? active_offsets->pselect_waiter_shift
+                                  : PSELECT_WAITER_WORD_SHIFT;
+  return fops_shift + 2;
 }
 
 int slide_pselect_global_word(int waiter_word) {
