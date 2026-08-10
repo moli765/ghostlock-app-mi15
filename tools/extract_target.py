@@ -995,6 +995,9 @@ def derive_pselect_layout(
     ]
     buffer_candidates: set[int] = set()
     for reg, imm in add_sp:
+        if not re.search(rf"\bmov\s+{re.escape(reg)},\s*x0\b",
+                         dis["pselect_core"], re.I):
+            continue
         peers = {peer for peer, peer_imm in add_sp if peer_imm == imm and peer != reg}
         if any(
             re.search(rf"\bcmp\s+{re.escape(reg)},\s*{re.escape(peer)}\b",
@@ -1013,6 +1016,8 @@ def derive_pselect_layout(
     buffer_regs = sorted({
         reg for reg, imm in add_sp
         if imm == pselect_buffer
+        and re.search(rf"\bmov\s+{re.escape(reg)},\s*x0\b",
+                      dis["pselect_core"], re.I)
     })
     if not buffer_regs:
         raise ExtractError("core_sys_select stack buffer has no output register")
@@ -1048,17 +1053,16 @@ def derive_pselect_layout(
     # Feasibility: core_sys_select copies 3 x FDS_BYTES(route_nfds) fd_set
     # qwords (0..14 for nfds=320); the waiter lock at qword shift+11 must fit
     # inside, else task/lock land in the zeroed tail and the route cannot work.
+    # We only warn (not fail) for shift>3 so the header is still generated with
+    # the correct shift; the runtime pselect_put_global_word gracefully skips
+    # out-of-range words. This matches the reference (Linuxoid-cn) which only
+    # rejects shift>16.
     if shift > 3:
-        raise InfeasibleError(
-            f"futex waiter starts {shift} qwords above the fd_set buffer; "
-            f"task/lock would land outside the user-controlled words 0..14 "
-            f"(max feasible shift is 3)"
-        )
-    if shift == 3:
         print(
-            "warning: waiter fits at the last usable word (shift=3); "
-            "wake_state falls outside the copied fd_set and relies on the "
-            "kernel zero-initialising it",
+            f"warning: futex waiter starts {shift} qwords above the fd_set "
+            f"buffer; task/lock may land outside the user-controlled words "
+            f"0..14 (max feasible shift is 3); the route may not work at "
+            f"runtime",
             file=sys.stderr,
         )
     return {
@@ -1323,7 +1327,8 @@ def kernel_struct_macro(release: str | None) -> str:
 def pselect_waiter_shift_for(release: str | None) -> int:
     """Fallback when --llvm-objdump is unavailable: 6.12 -> 0, 6.6 -> -2.
     Unreliable for kernels with a non-inlined do_pselect middle layer (e.g.
-    some 6.6.77 builds put the waiter 12 words up, which is infeasible)."""
+    some 6.6.77 builds put the waiter many words up, which may be infeasible
+    at runtime). Always prefer --llvm-objdump for accurate derivation."""
     return 0 if kernel_struct_macro(release) == "STRUCT_OFFSETS_6_12" else -2
 
 
